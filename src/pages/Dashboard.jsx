@@ -1,5 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { ThemeContext } from '../contexts/ThemeContext';
+import { AuthContext } from '../contexts/AuthContext';
+import accountService from '../services/accountService';
+import transactionService from '../services/transactionService';
+import notificationService from '../services/notificationService';
 
 // Material UI imports
 import {
@@ -21,7 +26,9 @@ import {
   CardActions,
   LinearProgress,
   useTheme,
-  useMediaQuery
+  useMediaQuery,
+  CircularProgress,
+  Alert
 } from '@mui/material';
 
 // Icons
@@ -34,119 +41,59 @@ import SendIcon from '@mui/icons-material/Send';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import NotificationsIcon from '@mui/icons-material/Notifications';
-import WarningIcon from '@mui/icons-material/Warning';
-import InfoIcon from '@mui/icons-material/Info';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-
-// Mock data for the dashboard
-const accountData = {
-  checking: {
-    name: 'Checking Account',
-    number: '**** 4567',
-    balance: 5842.50,
-    currency: 'LKR'
-  },
-  savings: {
-    name: 'Savings Account',
-    number: '**** 7890',
-    balance: 12750.75,
-    currency: 'LKR'
-  },
-  credit: {
-    name: 'Credit Card',
-    number: '**** 1234',
-    balance: 1250.00,
-    limit: 5000.00,
-    dueDate: '2023-10-15',
-    currency: 'LKR'
-  },
-  loan: {
-    name: 'Personal Loan',
-    number: 'LN-12345',
-    balance: 15000.00,
-    totalAmount: 25000.00,
-    nextPayment: 750.00,
-    nextPaymentDate: '2023-10-20',
-    currency: 'LKR'
-  }
-};
-
-const recentTransactions = [
-  {
-    id: 1,
-    type: 'debit',
-    amount: 120.50,
-    description: 'Amazon.com',
-    category: 'Shopping',
-    date: '2023-09-28',
-    time: '14:30'
-  },
-  {
-    id: 2,
-    type: 'credit',
-    amount: 2500.00,
-    description: 'Salary Deposit',
-    category: 'Income',
-    date: '2023-09-25',
-    time: '09:15'
-  },
-  {
-    id: 3,
-    type: 'debit',
-    amount: 45.00,
-    description: 'Netflix Subscription',
-    category: 'Entertainment',
-    date: '2023-09-22',
-    time: '18:45'
-  },
-  {
-    id: 4,
-    type: 'debit',
-    amount: 85.75,
-    description: 'Grocery Store',
-    category: 'Food',
-    date: '2023-09-20',
-    time: '11:20'
-  }
-];
-
-const notifications = [
-  {
-    id: 1,
-    type: 'warning',
-    message: 'Your credit card payment is due in 3 days',
-    date: '2023-09-28'
-  },
-  {
-    id: 2,
-    type: 'info',
-    message: 'New security features have been added to your account',
-    date: '2023-09-25'
-  }
-];
+import InfoIcon from '@mui/icons-material/Info';
+import WarningIcon from '@mui/icons-material/Warning';
 
 // Helper function to format currency
-const formatCurrency = (amount, currency = 'LKR') => {
+const formatCurrency = (amount, currency = 'USD') => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: currency
+    currency: currency,
   }).format(amount);
 };
 
-// Account Balance Card Component
+// Convert API transaction data to component-friendly format
+const mapTransaction = (transaction) => {
+  return {
+    id: transaction.id,
+    date: new Date(transaction.date_created).toISOString().split('T')[0],
+    time: new Date(transaction.date_created).toTimeString().substring(0, 8),
+    description: transaction.description || 'No description',
+    amount: parseFloat(transaction.amount),
+    currency: transaction.currency || 'LKR',
+    type: transaction.transaction_type === 'deposit' || 
+          transaction.source_account === null ? 'credit' : 'debit',
+    category: transaction.category || transaction.transaction_category || 'Other',
+    reference: transaction.reference_number,
+    account: transaction.source_account_number || transaction.destination_account_number
+  };
+};
+
+// Account Card Component
 const AccountCard = ({ account }) => {
-  const theme = useTheme();
+  if (!account) return null;
+  
+  // Determine account name if not explicitly provided
+  const accountName = account.name || (
+    account.account_type === 'checking' ? 'Checking Account' :
+    account.account_type === 'savings' ? 'Savings Account' :
+    account.account_type === 'credit' ? 'Credit Card' :
+    account.account_type === 'loan' ? 'Loan Account' : 'Account'
+  );
   
   return (
-    <Card 
-      sx={{ 
+    <Card
+      elevation={2}
+      sx={{
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
         position: 'relative',
         overflow: 'visible',
+        bgcolor: 'background.paper',
         '&:hover': {
-          boxShadow: '0 8px 16px rgba(0, 0, 0, 0.1)'
+          boxShadow: 6
         },
         transition: 'box-shadow 0.3s ease'
       }}
@@ -164,66 +111,66 @@ const AccountCard = ({ account }) => {
           justifyContent: 'center',
           bgcolor: 'primary.main',
           color: 'white',
-          boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)'
+          boxShadow: 2
         }}
       >
-        {account.name.includes('Checking') && <AccountBalanceIcon />}
-        {account.name.includes('Savings') && <SavingsIcon />}
-        {account.name.includes('Credit') && <CreditCardIcon />}
-        {account.name.includes('Loan') && <AccountBalanceIcon />}
+        {account.account_type === 'checking' && <AccountBalanceIcon />}
+        {account.account_type === 'savings' && <SavingsIcon />}
+        {account.account_type === 'credit' && <CreditCardIcon />}
+        {account.account_type === 'loan' && <AccountBalanceIcon />}
       </Box>
       
       <CardContent sx={{ pt: 4 }}>
         <Typography variant="h6" component="div" gutterBottom>
-          {account.name}
+          {accountName}
         </Typography>
         
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          Account Number: {account.number}
+          Account Number: {account.account_number}
         </Typography>
         
         <Typography variant="h4" component="div" sx={{ mt: 2, fontWeight: 'bold' }}>
           {formatCurrency(account.balance, account.currency)}
         </Typography>
         
-        {account.name.includes('Credit') && (
+        {account.account_type === 'credit' && (
           <Box sx={{ mt: 2 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                Credit Limit: {formatCurrency(account.limit, account.currency)}
+                Credit Limit: {formatCurrency(account.credit_limit, account.currency)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {Math.round((account.balance / account.limit) * 100)}%
+                {Math.round((account.balance / account.credit_limit) * 100)}%
               </Typography>
             </Box>
             <LinearProgress 
               variant="determinate" 
-              value={(account.balance / account.limit) * 100} 
+              value={(account.balance / account.credit_limit) * 100} 
               sx={{ height: 8, borderRadius: 4 }}
             />
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Due Date: {new Date(account.dueDate).toLocaleDateString()}
+              Due Date: {account.due_date ? new Date(account.due_date).toLocaleDateString() : 'N/A'}
             </Typography>
           </Box>
         )}
         
-        {account.name.includes('Loan') && (
+        {account.account_type === 'loan' && (
           <Box sx={{ mt: 2 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                Total: {formatCurrency(account.totalAmount, account.currency)}
+                Total: {formatCurrency(account.loan_amount, account.currency)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {Math.round(((account.totalAmount - account.balance) / account.totalAmount) * 100)}% Paid
+                {Math.round(((account.loan_amount - account.balance) / account.loan_amount) * 100)}% Paid
               </Typography>
             </Box>
             <LinearProgress 
               variant="determinate" 
-              value={((account.totalAmount - account.balance) / account.totalAmount) * 100} 
+              value={((account.loan_amount - account.balance) / account.loan_amount) * 100} 
               sx={{ height: 8, borderRadius: 4 }}
             />
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Next Payment: {formatCurrency(account.nextPayment, account.currency)} on {new Date(account.nextPaymentDate).toLocaleDateString()}
+              Next Payment: {account.next_payment_amount ? formatCurrency(account.next_payment_amount, account.currency) : 'N/A'} on {account.next_payment_date ? new Date(account.next_payment_date).toLocaleDateString() : 'N/A'}
             </Typography>
           </Box>
         )}
@@ -233,10 +180,10 @@ const AccountCard = ({ account }) => {
         <Button 
           size="small" 
           component={Link} 
-          to={account.name.includes('Credit') ? '/statements' : '/transactions'}
+          to={account.account_type === 'credit' ? '/statements' : '/transactions'}
           endIcon={<ArrowForwardIcon />}
         >
-          {account.name.includes('Credit') ? 'View Statement' : 'View Transactions'}
+          {account.account_type === 'credit' ? 'View Statement' : 'View Transactions'}
         </Button>
       </CardActions>
     </Card>
@@ -249,35 +196,39 @@ const TransactionItem = ({ transaction }) => {
     <ListItem 
       alignItems="flex-start"
       secondaryAction={
-        <IconButton edge="end" aria-label="more">
-          <MoreVertIcon />
+        <IconButton edge="end" aria-label="more" size="small">
+          <MoreVertIcon fontSize="small" />
         </IconButton>
       }
       sx={{ 
         borderLeft: '4px solid',
         borderColor: transaction.type === 'credit' ? 'success.main' : 'error.main',
         mb: 1,
+        py: 1, // Reduce vertical padding for more compact display
         borderRadius: 1,
         '&:hover': {
           bgcolor: 'action.hover'
         }
       }}
+      dense // Make the list item more compact
     >
-      <ListItemIcon>
+      <ListItemIcon sx={{ minWidth: '40px' }}>
         <Avatar 
           sx={{ 
             bgcolor: transaction.type === 'credit' ? 'success.light' : 'error.light',
-            color: '#fff'
+            color: '#fff',
+            width: 32, // Smaller avatar
+            height: 32 // Smaller avatar
           }}
         >
-          {transaction.type === 'credit' ? <ArrowDownwardIcon /> : <ArrowUpwardIcon />}
+          {transaction.type === 'credit' ? <ArrowDownwardIcon fontSize="small" /> : <ArrowUpwardIcon fontSize="small" />}
         </Avatar>
       </ListItemIcon>
       
       <ListItemText
         primary={
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Typography variant="subtitle2">
+            <Typography variant="subtitle2" noWrap sx={{ maxWidth: '180px' }}>
               {transaction.description}
             </Typography>
             <Typography 
@@ -287,17 +238,17 @@ const TransactionItem = ({ transaction }) => {
                 color: transaction.type === 'credit' ? 'success.main' : 'error.main'
               }}
             >
-              {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount)}
+              {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount, transaction.currency)}
             </Typography>
           </Box>
         }
         secondary={
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="caption" color="text.secondary">
               {transaction.category}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {new Date(transaction.date).toLocaleDateString()} {transaction.time}
+            <Typography variant="caption" color="text.secondary">
+              {new Date(transaction.date).toLocaleDateString()}
             </Typography>
           </Box>
         }
@@ -313,7 +264,7 @@ const NotificationItem = ({ notification }) => {
       alignItems="flex-start"
       sx={{ 
         borderLeft: '4px solid',
-        borderColor: notification.type === 'warning' ? 'warning.main' : 'info.main',
+        borderColor: notification.importance === 'high' ? 'warning.main' : 'info.main',
         mb: 1,
         borderRadius: 1,
         '&:hover': {
@@ -324,16 +275,16 @@ const NotificationItem = ({ notification }) => {
       <ListItemIcon>
         <Avatar 
           sx={{ 
-            bgcolor: notification.type === 'warning' ? 'warning.light' : 'info.light',
+            bgcolor: notification.importance === 'high' ? 'warning.light' : 'info.light',
             color: '#fff'
           }}
         >
-          {notification.type === 'warning' ? <WarningIcon /> : <InfoIcon />}
+          {notification.importance === 'high' ? <WarningIcon /> : <InfoIcon />}
         </Avatar>
       </ListItemIcon>
       
       <ListItemText
-        primary={notification.message}
+        primary={notification.title}
         secondary={new Date(notification.date).toLocaleDateString()}
       />
     </ListItem>
@@ -343,37 +294,100 @@ const NotificationItem = ({ notification }) => {
 const Dashboard = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const { user } = useContext(AuthContext);
   
+  const [accounts, setAccounts] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Fetch accounts
+        const accountsData = await accountService.getAccounts();
+        setAccounts(Array.isArray(accountsData) ? accountsData : []);
+
+        // Fetch recent transactions
+        const transactionsResponse = await transactionService.getRecentTransactions(5);
+        
+        // Process the transactions based on API response format
+        let processedTransactions = [];
+        
+        if (transactionsResponse) {
+          if (transactionsResponse.results) {
+            // Handle paginated response
+            processedTransactions = transactionsResponse.results;
+          } else if (Array.isArray(transactionsResponse)) {
+            // Handle direct array response
+            processedTransactions = transactionsResponse;
+          }
+        }
+        
+        setTransactions(processedTransactions);
+
+        // Fetch notifications
+        const userNotifications = await notificationService.getNotifications({
+          limit: 5,
+          unreadOnly: true
+        });
+        setNotifications(Array.isArray(userNotifications) ? userNotifications : []);
+
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+        setError('Failed to load dashboard data. Please try again later.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom>
-          Welcome back, saman
+          Welcome back, {user?.firstName || 'User'}
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Here's a summary of your accounts and recent activity
         </Typography>
       </Box>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
+        </Alert>
+      )}
       
-      {/* Account Balances */}
       <Typography variant="h6" component="h2" gutterBottom sx={{ mt: 4, mb: 3 }}>
         Your Accounts
       </Typography>
       
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6} lg={3}>
-          <AccountCard account={accountData.checking} />
+      {accounts.length === 0 ? (
+        <Alert severity="info">No accounts found.</Alert>
+      ) : (
+        <Grid container spacing={3}>
+          {accounts.map((account) => (
+            <Grid item xs={12} md={6} lg={3} key={account.id}>
+              <AccountCard account={account} />
+            </Grid>
+          ))}
         </Grid>
-        <Grid item xs={12} md={6} lg={3}>
-          <AccountCard account={accountData.savings} />
-        </Grid>
-        <Grid item xs={12} md={6} lg={3}>
-          <AccountCard account={accountData.credit} />
-        </Grid>
-        <Grid item xs={12} md={6} lg={3}>
-          <AccountCard account={accountData.loan} />
-        </Grid>
-      </Grid>
+      )}
       
       <Grid container spacing={3} sx={{ mt: 2 }}>
         {/* Recent Transactions */}
@@ -395,11 +409,17 @@ const Dashboard = () => {
             
             <Divider sx={{ mb: 2 }} />
             
-            <List sx={{ width: '100%' }}>
-              {recentTransactions.map((transaction) => (
-                <TransactionItem key={transaction.id} transaction={transaction} />
-              ))}
-            </List>
+            {transactions.length === 0 ? (
+              <Alert severity="info">No recent transactions found.</Alert>
+            ) : (
+              <Box sx={{ maxHeight: '300px', overflow: 'auto', borderRadius: 1, mb: 2 }}>
+                <List sx={{ width: '100%' }} dense>
+                  {transactions.map((transaction) => (
+                    <TransactionItem key={transaction.id} transaction={mapTransaction(transaction)} />
+                  ))}
+                </List>
+              </Box>
+            )}
             
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
               <Button 
@@ -442,11 +462,15 @@ const Dashboard = () => {
             
             <Divider sx={{ mb: 2 }} />
             
-            <List sx={{ width: '100%' }}>
-              {notifications.map((notification) => (
-                <NotificationItem key={notification.id} notification={notification} />
-              ))}
-            </List>
+            {notifications.length === 0 ? (
+              <Alert severity="info">No notifications found.</Alert>
+            ) : (
+              <List sx={{ width: '100%' }}>
+                {notifications.map((notification) => (
+                  <NotificationItem key={notification.id} notification={notification} />
+                ))}
+              </List>
+            )}
             
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
               <Button 

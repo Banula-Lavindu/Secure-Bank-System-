@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { AuthContext } from '../contexts/AuthContext';
+import authService from '../services/authService';
 
 // Material UI imports
 import {
@@ -33,91 +35,80 @@ const OtpInput = ({ length = 6, value, onChange }) => {
     newOtp[index] = newValue;
     setOtp(newOtp);
     
-    // Combine OTP digits and call parent onChange
-    const combinedOtp = newOtp.join('');
-    onChange(combinedOtp);
+    // Notify parent component
+    onChange(newOtp.join(''));
     
-    // Auto-focus next input if current input is filled
+    // Auto focus next input field if filled
     if (newValue && index < length - 1) {
       inputRefs.current[index + 1].focus();
     }
   };
-
+  
   const handleKeyDown = (e, index) => {
-    // Move focus to previous input on backspace if current input is empty
+    // Move focus to previous input on backspace with empty input
     if (e.key === 'Backspace' && !otp[index] && index > 0) {
       inputRefs.current[index - 1].focus();
     }
   };
-
+  
   const handlePaste = (e) => {
     e.preventDefault();
-    const pastedData = e.clipboardData.getData('text/plain').trim();
-    if (!/^\d+$/.test(pastedData)) return; // Only allow digits
+    const pasteData = e.clipboardData.getData('text/plain').trim();
+    if (!/^\d+$/.test(pasteData)) return; // Only allow digits
     
-    const pastedOtp = pastedData.slice(0, length).split('');
-    const newOtp = [...Array(length).fill('')];
-    
-    pastedOtp.forEach((digit, index) => {
-      newOtp[index] = digit;
-    });
-    
+    const newOtp = [...otp];
+    for (let i = 0; i < Math.min(pasteData.length, length); i++) {
+      newOtp[i] = pasteData[i];
+    }
     setOtp(newOtp);
     onChange(newOtp.join(''));
     
-    // Focus the next empty input or the last input
-    const focusIndex = Math.min(pastedOtp.length, length - 1);
-    inputRefs.current[focusIndex].focus();
+    // Focus on the appropriate field after paste
+    if (pasteData.length < length) {
+      inputRefs.current[Math.min(pasteData.length, length - 1)].focus();
+    }
   };
 
   return (
-    <Box 
-      sx={{
-        display: 'flex',
-        justifyContent: 'center',
-        gap: { xs: 1, sm: 2 }
-      }}
-    >
-      {otp.map((digit, index) => (
+    <Stack direction="row" spacing={1} justifyContent="center">
+      {Array(length).fill(0).map((_, index) => (
         <TextField
           key={index}
-          inputRef={(el) => (inputRefs.current[index] = el)}
-          value={digit}
+          value={otp[index]}
           onChange={(e) => handleChange(e, index)}
           onKeyDown={(e) => handleKeyDown(e, index)}
           onPaste={index === 0 ? handlePaste : undefined}
+          inputRef={(el) => (inputRefs.current[index] = el)}
+          variant="outlined"
+          autoComplete="one-time-code"
           inputProps={{
             maxLength: 1,
-            style: { textAlign: 'center', fontSize: '1.5rem', fontWeight: 'bold' }
+            style: { textAlign: 'center', fontWeight: 'bold', fontSize: '1.2rem' },
           }}
-          variant="outlined"
-          sx={{
-            width: { xs: '40px', sm: '56px' },
-            height: { xs: '50px', sm: '64px' }
-          }}
+          sx={{ width: { xs: '40px', sm: '56px' }, height: { xs: '50px', sm: '56px' } }}
         />
       ))}
-    </Box>
+    </Stack>
   );
 };
 
-// Countdown Timer Component
-const CountdownTimer = ({ seconds, onComplete }) => {
+// Timer Component for Resend Code
+const ResendTimer = ({ seconds, onComplete }) => {
   const [timeLeft, setTimeLeft] = useState(seconds);
-
+  
   useEffect(() => {
     if (timeLeft <= 0) {
       onComplete();
       return;
     }
-
-    const timer = setInterval(() => {
-      setTimeLeft((prevTime) => prevTime - 1);
+    
+    const timer = setTimeout(() => {
+      setTimeLeft(timeLeft - 1);
     }, 1000);
-
-    return () => clearInterval(timer);
+    
+    return () => clearTimeout(timer);
   }, [timeLeft, onComplete]);
-
+  
   const formatTime = (time) => {
     const minutes = Math.floor(time / 60);
     const seconds = time % 60;
@@ -135,11 +126,37 @@ const OtpVerification = () => {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showResend, setShowResend] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
+  const [showResend, setShowResend] = useState(true);
+  const { user, login } = useContext(AuthContext);
   const navigate = useNavigate();
+  
+  // Retrieve email from localStorage for verification
+  const [email, setEmail] = useState(() => {
+    return localStorage.getItem('tempEmail') || user?.email || '';
+  });
 
+  // Determine if this is a registration verification
+  const [purpose, setPurpose] = useState(() => {
+    return localStorage.getItem('otpPurpose') || 'registration';
+  });
+  
+  useEffect(() => {
+    // For development convenience, auto-populate the OTP if it exists in localStorage
+    const tempOtpCode = localStorage.getItem('tempOtpCode');
+    if (tempOtpCode) {
+      setOtp(tempOtpCode);
+      // Remove it after using to prevent security issues
+      localStorage.removeItem('tempOtpCode');
+    }
+
+    // If no email is found, redirect to login
+    if (!email) {
+      navigate('/login');
+    }
+  }, [navigate, email]);
+  
   const handleOtpChange = (value) => {
     setOtp(value);
     setError(''); // Clear error when user types
@@ -155,28 +172,36 @@ const OtpVerification = () => {
     setError('');
 
     try {
-      // In a real app, you would make an API call to verify the OTP
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate API call
+      if (!email) {
+        throw new Error('Email address not found. Please try registering again.');
+      }
+
+      // Call API to verify OTP
+      const response = await authService.verifyOTP(email, otp, purpose);
       
-      // For demo purposes, we'll accept any 6-digit OTP
-      // In a real app, you would validate the OTP against what was sent to the user
-      if (otp.length === 6) {
-        // Get user role from localStorage
-        const userData = localStorage.getItem('userData');
-        const role = userData ? JSON.parse(userData).role : 'customer';
+      // Update token if a new one is provided
+      if (response.token) {
+        localStorage.setItem('authToken', response.token);
         
-        // Redirect based on user role
-        if (role === 'admin') {
-          navigate('/admin');
-        } else {
-          navigate('/');
+        // If this was a registration verification, perform login with the response
+        if (purpose === 'registration' && response.user) {
+          await login(response); // Use the login function from AuthContext to set user state
         }
+      }
+      
+      // Clean up localStorage items
+      localStorage.removeItem('tempEmail');
+      localStorage.removeItem('otpPurpose');
+      
+      // Redirect based on user role
+      if (response.user?.role === 'admin') {
+        navigate('/admin');
       } else {
-        setError('Invalid OTP. Please try again.');
+        navigate('/');
       }
     } catch (error) {
       console.error('OTP verification error:', error);
-      setError('Failed to verify OTP. Please try again.');
+      setError(error.message || 'Failed to verify OTP. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -187,102 +212,83 @@ const OtpVerification = () => {
     setResendSuccess(false);
     
     try {
-      // In a real app, you would make an API call to resend OTP
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      if (!email) {
+        throw new Error('Email address not found. Please try registering again.');
+      }
+      
+      // Call API to resend OTP
+      await authService.resendOTP(email, purpose);
       
       setResendSuccess(true);
-      setShowResend(false); // Reset the timer
+      setShowResend(false); // Hide the resend button
+      
+      // Show resend button after timer expires
+      setTimeout(() => {
+        setShowResend(true);
+        setResendSuccess(false);
+      }, 60000); // 60 seconds
     } catch (error) {
       console.error('Resend OTP error:', error);
-      setError('Failed to resend OTP. Please try again.');
+      setError(error.message || 'Failed to resend OTP. Please try again.');
     } finally {
       setResendLoading(false);
     }
   };
 
-  const handleTimerComplete = () => {
-    setShowResend(true);
-  };
-
   return (
     <Box>
       <Typography variant="h5" component="h1" gutterBottom align="center" fontWeight="bold">
-        Verification Code
+        Verify OTP
       </Typography>
+      
       <Typography variant="body1" color="text.secondary" align="center" sx={{ mb: 4 }}>
-        We've sent a 6-digit code to your email/phone. Enter the code below to verify your identity.
+        A verification code has been sent to your email. Please enter it below.
       </Typography>
-
+      
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
       )}
-
+      
       {resendSuccess && (
         <Alert severity="success" sx={{ mb: 3 }}>
-          A new verification code has been sent successfully.
+          Verification code has been resent to your email.
         </Alert>
       )}
-
+      
       <Box sx={{ mb: 4 }}>
-        <OtpInput 
-          length={6} 
-          value={otp} 
-          onChange={handleOtpChange} 
-        />
+        <OtpInput length={6} value={otp} onChange={handleOtpChange} />
       </Box>
-
+      
       <Button
         fullWidth
         variant="contained"
-        color="primary"
         size="large"
-        onClick={handleVerify}
         disabled={loading || otp.length !== 6}
-        sx={{ 
-          py: 1.5,
-          mb: 3,
-          borderRadius: '8px',
-          fontWeight: 'bold'
-        }}
+        onClick={handleVerify}
+        sx={{ mb: 3, py: 1.5, borderRadius: '8px', fontWeight: 'bold' }}
       >
         {loading ? <CircularProgress size={24} color="inherit" /> : 'Verify'}
       </Button>
-
-      <Box sx={{ textAlign: 'center', mt: 2 }}>
+      
+      <Box sx={{ textAlign: 'center', mb: 3 }}>
         {showResend ? (
           <Button
             variant="text"
             color="primary"
-            onClick={handleResendOtp}
             disabled={resendLoading}
+            onClick={handleResendOtp}
           >
             {resendLoading ? 'Sending...' : 'Resend Code'}
           </Button>
         ) : (
-          <CountdownTimer seconds={60} onComplete={handleTimerComplete} />
+          <ResendTimer seconds={60} onComplete={() => setShowResend(true)} />
         )}
       </Box>
-
-      <Box sx={{ mt: 4, textAlign: 'center' }}>
-        <Typography variant="body2" color="text.secondary">
-          Didn't receive the code? Check your spam folder or contact support.
-        </Typography>
-      </Box>
-
-      <Paper 
-        elevation={0} 
-        sx={{ 
-          bgcolor: 'action.hover', 
-          p: 2, 
-          mt: 4, 
-          borderRadius: 2,
-          border: '1px solid',
-          borderColor: 'divider'
-        }}
-      >
-        <Typography variant="body2" color="text.secondary">
+      
+      <Paper sx={{ p: 2, bgcolor: 'background.default', borderRadius: 2 }}>
+        <Typography variant="body2" color="text.secondary" align="center">
           <strong>Demo Note:</strong> For testing purposes, use code <strong>123456</strong> to proceed to the dashboard.
         </Typography>
       </Paper>

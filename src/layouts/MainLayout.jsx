@@ -1,6 +1,8 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { ThemeContext } from '../contexts/ThemeContext';
+import { AuthContext } from '../contexts/AuthContext';
+import { NotificationContext } from '../contexts/NotificationContext';
 
 // Material UI imports
 import {
@@ -40,25 +42,20 @@ import HelpIcon from '@mui/icons-material/Help';
 import LogoutIcon from '@mui/icons-material/Logout';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 
 const drawerWidth = 240;
 
 const MainLayout = () => {
   const { darkMode, toggleTheme } = useContext(ThemeContext);
+  const { user, logout, isAdmin } = useContext(AuthContext);
+  const { unreadCount } = useContext(NotificationContext);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-
-  // Mock user data - in a real app, this would come from context
-  const user = {
-    name: 'saman kumara',
-    avatar: null,
-    email: 'saman.kumara@example.com',
-    role: 'customer'
-  };
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
@@ -73,13 +70,12 @@ const MainLayout = () => {
   };
 
   const handleLogout = () => {
-    // Clear auth data from localStorage
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('userData');
+    logout();
     navigate('/login');
   };
 
-  const menuItems = [
+  // Regular user menu items
+  const regularMenuItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Transactions', icon: <ReceiptLongIcon />, path: '/transactions' },
     { text: 'Transfer Funds', icon: <SendIcon />, path: '/transfer' },
@@ -87,6 +83,11 @@ const MainLayout = () => {
     { text: 'Profile', icon: <PersonIcon />, path: '/profile' },
     { text: 'Support', icon: <HelpIcon />, path: '/support' },
   ];
+  
+  // Add admin menu item if user is admin
+  const menuItems = isAdmin 
+    ? [...regularMenuItems, { text: 'Admin Panel', icon: <AdminPanelSettingsIcon />, path: '/admin' }]
+    : regularMenuItems;
 
   const drawer = (
     <div>
@@ -164,10 +165,11 @@ const MainLayout = () => {
           </IconButton>
           <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
             {menuItems.find(item => item.path === location.pathname)?.text || 'Dashboard'}
+            {isAdmin && location.pathname === '/admin' && ' (Admin)'}
           </Typography>
           
           <IconButton color="inherit" component={Link} to="/notifications">
-            <Badge badgeContent={4} color="error">
+            <Badge badgeContent={unreadCount} color="error">
               <NotificationsIcon />
             </Badge>
           </IconButton>
@@ -181,11 +183,12 @@ const MainLayout = () => {
             color="inherit"
             sx={{ ml: 1 }}
           >
-            {user.avatar ? (
-              <Avatar alt={user.name} src={user.avatar} />
+            {user?.avatar ? (
+              <Avatar alt={`${user.first_name} ${user.last_name}`} src={user.avatar} />
             ) : (
               <Avatar sx={{ bgcolor: 'secondary.main' }}>
-                {user.name.charAt(0)}
+                {user?.first_name ? user.first_name.charAt(0).toUpperCase() : ''}
+                {user?.last_name ? user.last_name.charAt(0).toUpperCase() : 'U'}
               </Avatar>
             )}
           </IconButton>
@@ -203,6 +206,14 @@ const MainLayout = () => {
               </ListItemIcon>
               <ListItemText>Profile</ListItemText>
             </MenuItem>
+            {isAdmin && (
+              <MenuItem component={Link} to="/admin" onClick={handleProfileMenuClose}>
+                <ListItemIcon>
+                  <AdminPanelSettingsIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>Admin Panel</ListItemText>
+              </MenuItem>
+            )}
             <Divider />
             <MenuItem onClick={handleLogout}>
               <ListItemIcon>
@@ -251,7 +262,7 @@ const MainLayout = () => {
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           mt: '64px',
           minHeight: 'calc(100vh - 64px)',
-          bgcolor: darkMode ? 'background.default' : '#f5f5f5'
+          bgcolor: 'background.default'
         }}
       >
         <Outlet />
