@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
+import transactionService from '../services/transactionService';
+import accountService from '../services/accountService';
+import { Link } from 'react-router-dom';
 
 // Material UI imports
 import {
@@ -44,102 +47,94 @@ import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import NoteIcon from '@mui/icons-material/Note';
 import SendIcon from '@mui/icons-material/Send';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import StarIcon from '@mui/icons-material/Star';
-import StarBorderIcon from '@mui/icons-material/StarBorder';
 import HistoryIcon from '@mui/icons-material/History';
+import StarIcon from '@mui/icons-material/Star';
 
-// Mock data for accounts
-const accounts = [
-  {
-    id: 1,
-    name: 'Checking Account',
-    number: '**** 4567',
-    balance: 5842.50,
-    currency: 'LKR'
-  },
-  {
-    id: 2,
-    name: 'Savings Account',
-    number: '**** 7890',
-    balance: 12750.75,
-    currency: 'LKR'
-  }
-];
-
-// Mock data for recent beneficiaries
-const recentBeneficiaries = [
-  {
-    id: 1,
-    name: 'Jane Smith',
-    accountNumber: '**** 1234',
-    bank: 'Chase Bank',
-    isFavorite: true,
-    lastTransferDate: '2023-09-15'
-  },
-  {
-    id: 2,
-    name: 'Mike samanson',
-    accountNumber: '**** 5678',
-    bank: 'Bank of America',
-    isFavorite: false,
-    lastTransferDate: '2023-09-10'
-  },
-  {
-    id: 3,
-    name: 'Sarah Williams',
-    accountNumber: '**** 9012',
-    bank: 'Wells Fargo',
-    isFavorite: true,
-    lastTransferDate: '2023-09-05'
-  },
-  {
-    id: 4,
-    name: 'Robert Brown',
-    accountNumber: '**** 3456',
-    bank: 'Citibank',
-    isFavorite: false,
-    lastTransferDate: '2023-08-28'
-  }
-];
+// Validation schema
+const TransferSchema = Yup.object().shape({
+  fromAccount: Yup.string()
+    .required('Please select source account'),
+  toAccount: Yup.string()
+    .required('Please select beneficiary account')
+    .notOneOf([Yup.ref('fromAccount')], 'Cannot transfer to the same account'),
+  amount: Yup.number()
+    .required('Amount is required')
+    .positive('Amount must be positive')
+    .test('is-greater-than-min', 'Amount must be at least LKR 100.00', value => value >= 100)
+    .test(
+      'is-within-balance',
+      'Amount exceeds available balance',
+      function(value) {
+        const { fromAccount } = this.parent;
+        const account = this.options.context?.accounts?.find(acc => acc.id.toString() === fromAccount);
+        if (!account) return true; // Skip validation if account not found
+        return parseFloat(value) <= parseFloat(account.balance);
+      }
+    ),
+  reference: Yup.string()
+    .max(50, 'Reference should not exceed 50 characters')
+});
 
 // Helper function to format currency
 const formatCurrency = (amount, currency = 'LKR') => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: currency
+    currency: currency,
   }).format(amount);
 };
-
-// Validation schema
-const TransferSchema = Yup.object().shape({
-  fromAccount: Yup.string().required('Please select an account'),
-  toAccount: Yup.string().required('Please select a recipient'),
-  amount: Yup.number()
-    .required('Amount is required')
-    .positive('Amount must be positive')
-    .test(
-      'max-amount',
-      'Insufficient funds',
-      function(value) {
-        const { fromAccount } = this.parent;
-        const selectedAccount = accounts.find(acc => acc.id.toString() === fromAccount);
-        return selectedAccount ? value <= selectedAccount.balance : true;
-      }
-    ),
-  reference: Yup.string().max(50, 'Reference must be less than 50 characters')
-});
 
 const FundTransfer = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  
+  const [accounts, setAccounts] = useState([]);
+  const [beneficiaries, setBeneficiaries] = useState([]);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [successDialogOpen, setSuccessDialogOpen] = useState(false);
   const [transferDetails, setTransferDetails] = useState(null);
+  const [transferSuccess, setTransferSuccess] = useState(false);
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferError, setTransferError] = useState('');
-  const [transferSuccess, setTransferSuccess] = useState(false);
   const [transferReference, setTransferReference] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   
+  // Define fetchData outside useEffect to reuse it after successful transfer
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch user accounts
+      const accountsData = await accountService.getAccounts();
+      // Filter out only checking and savings accounts that are active
+      const eligibleAccounts = Array.isArray(accountsData) 
+        ? accountsData.filter(acc => 
+            (acc.account_type === 'checking' || acc.account_type === 'savings') && 
+            acc.is_active && 
+            parseFloat(acc.balance) > 0
+          )
+        : [];
+      setAccounts(eligibleAccounts);
+
+      // Fetch beneficiaries
+      const beneficiariesResponse = await transactionService.getBeneficiaries();
+      const beneficiariesData = beneficiariesResponse?.results || 
+                               (Array.isArray(beneficiariesResponse) ? beneficiariesResponse : []);
+      setBeneficiaries(beneficiariesData);
+
+    } catch (err) {
+      console.error('Error fetching fund transfer data:', err);
+      setError('Failed to load accounts or beneficiaries. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  useEffect(() => {
+    fetchData();
+  }, []);
+
   const handleSubmit = (values, { setSubmitting }) => {
     setTransferDetails(values);
     setConfirmDialogOpen(true);
@@ -151,19 +146,28 @@ const FundTransfer = () => {
     setTransferError('');
     
     try {
-      // In a real app, you would make an API call here
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate API call
+      // Get the selected beneficiary details
+      const selectedBeneficiary = beneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount);
       
-      // Generate a reference number
-      const referenceNumber = `TRF-${Date.now().toString().slice(-6)}`;
-      setTransferReference(referenceNumber);
+      // Call the API to transfer funds
+      const response = await transactionService.createTransfer({
+        fromAccountId: transferDetails.fromAccount,
+        amount: parseFloat(transferDetails.amount),
+        reference: transferDetails.reference || 'Fund Transfer',
+        // For external transfers to beneficiaries
+        destinationAccountExternal: selectedBeneficiary.account_number,
+        destinationBankExternal: selectedBeneficiary.bank
+      });
+      
+      // Set reference number from response
+      setTransferReference(response.reference_number);
       
       setTransferSuccess(true);
       setConfirmDialogOpen(false);
       setSuccessDialogOpen(true);
     } catch (error) {
       console.error('Transfer error:', error);
-      setTransferError('Failed to process transfer. Please try again.');
+      setTransferError(error.message || 'Failed to process transfer. Please try again.');
     } finally {
       setTransferLoading(false);
     }
@@ -175,20 +179,47 @@ const FundTransfer = () => {
   
   const handleCloseSuccessDialog = () => {
     setSuccessDialogOpen(false);
+    
     // Reset form after successful transfer
+    if (window.formikRef) {
+      window.formikRef.resetForm();
+    }
+    
+    // Reset states
     setTransferDetails(null);
     setTransferSuccess(false);
+    setTransferReference('');
+    
+    // Refresh account data to show updated balances
+    fetchData();
   };
   
-  const handleSelectBeneficiary = (beneficiary, setFieldValue) => {
-    setFieldValue('toAccount', beneficiary.id.toString());
+  // Fix for handling beneficiary selection from the sidebar
+  const handleSelectBeneficiary = (beneficiary) => {
+    if (window.formikRef) {
+      window.formikRef.setFieldValue('toAccount', beneficiary.id.toString());
+    }
   };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
   
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
         Fund Transfer
       </Typography>
+      
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
+        </Alert>
+      )}
       
       <Grid container spacing={3}>
         <Grid item xs={12} md={8}>
@@ -206,6 +237,11 @@ const FundTransfer = () => {
               }}
               validationSchema={TransferSchema}
               onSubmit={handleSubmit}
+              validateOnChange={true}
+              validateOnBlur={true}
+              enableReinitialize={true}
+              innerRef={(formik) => { window.formikRef = formik; }}
+              validationContext={{ accounts }}
             >
               {({ isSubmitting, errors, touched, values, setFieldValue }) => (
                 <Form>
@@ -225,7 +261,7 @@ const FundTransfer = () => {
                           {accounts.map((account) => (
                             <MenuItem key={account.id} value={account.id.toString()}>
                               <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                <Typography>{account.name} ({account.number})</Typography>
+                                <Typography>{account.account_type === 'checking' ? 'Checking' : 'Savings'} ({account.account_number})</Typography>
                                 <Typography sx={{ fontWeight: 'bold' }}>
                                   {formatCurrency(account.balance, account.currency)}
                                 </Typography>
@@ -251,26 +287,18 @@ const FundTransfer = () => {
                           labelId="to-account-label"
                           label="To Account/Beneficiary"
                         >
-                          <MenuItem value="" disabled>
-                            <em>Select a beneficiary</em>
-                          </MenuItem>
-                          <MenuItem value="new">+ Add New Beneficiary</MenuItem>
-                          <Divider />
-                          {recentBeneficiaries.map((beneficiary) => (
+                          {beneficiaries.map((beneficiary) => (
                             <MenuItem key={beneficiary.id} value={beneficiary.id.toString()}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                                <Avatar sx={{ mr: 2, bgcolor: 'primary.main' }}>
-                                  <PersonIcon />
-                                </Avatar>
-                                <Box sx={{ flexGrow: 1 }}>
+                              <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center' }}>
                                   <Typography>{beneficiary.name}</Typography>
-                                  <Typography variant="body2" color="text.secondary">
-                                    {beneficiary.accountNumber} • {beneficiary.bank}
-                                  </Typography>
+                                  {beneficiary.is_favorite && (
+                                    <StarIcon color="warning" fontSize="small" sx={{ ml: 1 }} />
+                                  )}
                                 </Box>
-                                {beneficiary.isFavorite && (
-                                  <StarIcon color="warning" fontSize="small" />
-                                )}
+                                <Typography variant="caption" color="text.secondary">
+                                  {beneficiary.account_number} • {beneficiary.bank}
+                                </Typography>
                               </Box>
                             </MenuItem>
                           ))}
@@ -287,18 +315,21 @@ const FundTransfer = () => {
                         fullWidth
                         name="amount"
                         label="Amount"
+                        placeholder="Enter amount"
                         type="number"
-                        InputProps={{
-                          startAdornment: <InputAdornment position="start">$</InputAdornment>,
-                        }}
                         error={touched.amount && Boolean(errors.amount)}
                         helperText={touched.amount && errors.amount}
+                        InputProps={{
+                          startAdornment: (
+                            <InputAdornment position="start">LKR</InputAdornment>
+                          ),
+                        }}
                       />
-                      
-                      {values.fromAccount && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      {values.fromAccount && accounts.find(acc => acc.id.toString() === values.fromAccount) && (
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                           Available Balance: {formatCurrency(
-                            accounts.find(acc => acc.id.toString() === values.fromAccount)?.balance || 0
+                            accounts.find(acc => acc.id.toString() === values.fromAccount).balance,
+                            accounts.find(acc => acc.id.toString() === values.fromAccount).currency
                           )}
                         </Typography>
                       )}
@@ -349,58 +380,56 @@ const FundTransfer = () => {
             
             <Divider sx={{ mb: 2 }} />
             
-            <List sx={{ width: '100%' }}>
-              {recentBeneficiaries.slice(0, 3).map((beneficiary) => (
-                <ListItem 
-                  key={beneficiary.id}
-                  alignItems="flex-start"
-                  sx={{ 
-                    mb: 1, 
-                    p: 1,
-                    borderRadius: 1,
-                    '&:hover': { bgcolor: 'action.hover' },
-                    cursor: 'pointer'
-                  }}
-                  onClick={() => handleSelectBeneficiary(beneficiary, (name, value) => {
-                    const formikForm = document.querySelector('form');
-                    if (formikForm) {
-                      const formik = formikForm.Formik;
-                      if (formik) {
-                        formik.setFieldValue(name, value);
+            {beneficiaries.length === 0 ? (
+              <Alert severity="info">No recent beneficiaries found.</Alert>
+            ) : (
+              <List sx={{ width: '100%' }}>
+                {beneficiaries.slice(0, 3).map((beneficiary) => (
+                  <ListItem 
+                    key={beneficiary.id}
+                    alignItems="flex-start"
+                    sx={{ 
+                      mb: 1, 
+                      p: 1,
+                      borderRadius: 1,
+                      '&:hover': { bgcolor: 'action.hover' },
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => handleSelectBeneficiary(beneficiary)}
+                  >
+                    <ListItemAvatar>
+                      <Avatar sx={{ bgcolor: 'primary.main' }}>
+                        <PersonIcon />
+                      </Avatar>
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          {beneficiary.name}
+                          {beneficiary.is_favorite && (
+                            <StarIcon color="warning" fontSize="small" sx={{ ml: 1 }} />
+                          )}
+                        </Box>
                       }
-                    }
-                  })}
-                >
-                  <ListItemAvatar>
-                    <Avatar sx={{ bgcolor: 'primary.main' }}>
-                      <PersonIcon />
-                    </Avatar>
-                  </ListItemAvatar>
-                  <ListItemText
-                    primary={
-                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                        {beneficiary.name}
-                        {beneficiary.isFavorite && (
-                          <StarIcon color="warning" fontSize="small" sx={{ ml: 1 }} />
-                        )}
-                      </Box>
-                    }
-                    secondary={
-                      <React.Fragment>
-                        <Typography variant="body2" component="span" color="text.secondary">
-                          {beneficiary.accountNumber} • {beneficiary.bank}
-                        </Typography>
-                      </React.Fragment>
-                    }
-                  />
-                </ListItem>
-              ))}
-            </List>
+                      secondary={
+                        <React.Fragment>
+                          <Typography variant="body2" component="span" color="text.secondary">
+                            {beneficiary.account_number} • {beneficiary.bank}
+                          </Typography>
+                        </React.Fragment>
+                      }
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            )}
             
             <Button 
               fullWidth 
               variant="outlined" 
               sx={{ mt: 1 }}
+              component={Link}
+              to="/beneficiaries"
             >
               View All Beneficiaries
             </Button>
@@ -408,21 +437,24 @@ const FundTransfer = () => {
           
           <Card sx={{ bgcolor: 'primary.light', color: 'white', mb: 3 }}>
             <CardContent>
-              <Typography variant="h6" component="h3" gutterBottom>
+              <Typography variant="h6" gutterBottom>
                 Transfer Tips
               </Typography>
-              <Typography variant="body2" component="ul" sx={{ pl: 2 }}>
-                <li>Double-check account details before confirming</li>
-                <li>Transfers between our bank accounts are instant</li>
-                <li>External transfers may take 1-3 business days</li>
-                <li>Save beneficiaries for faster future transfers</li>
+              <Typography variant="body2" paragraph>
+                • Double-check beneficiary details before confirming
+              </Typography>
+              <Typography variant="body2" paragraph>
+                • Add a reference for tracking your transfer
+              </Typography>
+              <Typography variant="body2">
+                • For large transfers, consider multiple smaller transfers
               </Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
       
-      {/* Confirm Transfer Dialog */}
+      {/* Confirmation Dialog */}
       <Dialog
         open={confirmDialogOpen}
         onClose={handleCloseConfirmDialog}
@@ -431,7 +463,7 @@ const FundTransfer = () => {
       >
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Typography variant="h6">Confirm Transfer</Typography>
-          <IconButton onClick={handleCloseConfirmDialog} size="small">
+          <IconButton onClick={handleCloseConfirmDialog} disabled={transferLoading} size="small">
             <CloseIcon />
           </IconButton>
         </DialogTitle>
@@ -457,7 +489,7 @@ const FundTransfer = () => {
                       <Typography variant="body2" color="text.secondary">From Account</Typography>
                       <Typography variant="body1">
                         {accounts.find(acc => acc.id.toString() === transferDetails.fromAccount)?.name} 
-                        ({accounts.find(acc => acc.id.toString() === transferDetails.fromAccount)?.number})
+                        ({accounts.find(acc => acc.id.toString() === transferDetails.fromAccount)?.account_number})
                       </Typography>
                     </Box>
                   </Box>
@@ -469,11 +501,11 @@ const FundTransfer = () => {
                     <Box>
                       <Typography variant="body2" color="text.secondary">To Beneficiary</Typography>
                       <Typography variant="body1">
-                        {recentBeneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.name} 
-                        ({recentBeneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.accountNumber})
+                        {beneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.name} 
+                        ({beneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.account_number})
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        {recentBeneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.bank}
+                        {beneficiaries.find(ben => ben.id.toString() === transferDetails.toAccount)?.bank}
                       </Typography>
                     </Box>
                   </Box>

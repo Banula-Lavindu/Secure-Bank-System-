@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useContext } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
+import { AuthContext } from '../contexts/AuthContext';
 
 // Material UI imports
 import {
@@ -14,62 +15,108 @@ import {
   InputAdornment,
   IconButton,
   Alert,
-  Divider,
   CircularProgress
 } from '@mui/material';
 
 // Icons
-import Visibility from '@mui/icons-material/Visibility';
-import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import EmailIcon from '@mui/icons-material/Email';
 import LockIcon from '@mui/icons-material/Lock';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
 // Validation schema
 const LoginSchema = Yup.object().shape({
   email: Yup.string()
     .email('Invalid email address')
-    .required('Email is required'),
+    .required('Email is required')
+    .max(255, 'Email must be at most 255 characters'),
   password: Yup.string()
-    .min(8, 'Password must be at least 8 characters')
-    .required('Password is required'),
-  rememberMe: Yup.boolean()
+    .required('Password is required')
+    .max(128, 'Password must be at most 128 characters')
 });
 
 const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [loginAttempts, setLoginAttempts] = useState(0);
   const navigate = useNavigate();
+  const { login } = useContext(AuthContext);
 
   const handleTogglePassword = () => {
     setShowPassword(!showPassword);
   };
 
-  const handleSubmit = async (values, { setSubmitting }) => {
+  const handleSubmit = async (values, { setSubmitting, setFieldError }) => {
     try {
       // Clear any previous errors
       setLoginError('');
       
-      // In a real app, you would make an API call here
-      console.log('Login attempt with:', values);
+      // Limit login attempts to prevent brute force
+      if (loginAttempts >= 5) {
+        setLoginError('Too many failed login attempts. Please try again later.');
+        setSubmitting(false);
+        return;
+      }
       
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Sanitize input
+      const email = values.email.trim().toLowerCase();
+      const password = values.password;
       
-      // For demo purposes, we'll simulate a successful login
-      localStorage.setItem('authToken', 'demo-token-12345');
-      localStorage.setItem('userData', JSON.stringify({
-        id: '1',
-        name: 'saman kumara',
-        email: values.email,
-        // Set role based on email for demo
-        role: values.email === 'admin@example.com' ? 'admin' : 'customer'
-      }));
+      // Call login method from AuthContext
+      const response = await login(email, password);
       
-      // Redirect to OTP verification
-      navigate('/otp-verification');
+      // Reset login attempts on success
+      setLoginAttempts(0);
+      
+      // Redirect based on 2FA requirement
+      if (response && response.requires_otp) {
+        // Store email and purpose for OTP verification
+        localStorage.setItem('tempEmail', email);
+        localStorage.setItem('otpPurpose', 'login');
+        
+        navigate('/otp-verification');
+      } else {
+        // If 2FA is not required, redirect to dashboard
+        navigate('/');
+      }
     } catch (error) {
       console.error('Login error:', error);
-      setLoginError('Invalid email or password. Please try again.');
+      
+      // Increment login attempts for rate limiting
+      setLoginAttempts(prev => prev + 1);
+      
+      // Handle structured errors
+      if (error.errors) {
+        // Handle structured errors from the backend
+        Object.entries(error.errors).forEach(([field, messages]) => {
+          const message = Array.isArray(messages) ? messages[0] : messages;
+          
+          switch(field) {
+            case 'email':
+              setFieldError('email', message);
+              break;
+            case 'password':
+              setFieldError('password', message);
+              break;
+            default:
+              // For any other field errors, set as general error
+              setLoginError(prev => prev ? `${prev}. ${message}` : message);
+          }
+        });
+      } else {
+        // Handle individual field errors for backward compatibility
+        if (error.email) {
+          setFieldError('email', Array.isArray(error.email) ? error.email[0] : error.email);
+        }
+        if (error.password) {
+          setFieldError('password', Array.isArray(error.password) ? error.password[0] : error.password);
+        }
+        
+        // Set general error message if no specific field errors
+        if (!error.email && !error.password && !error.errors) {
+          setLoginError(error.message || error.non_field_errors?.[0] || 'Invalid email or password. Please try again.');
+        }
+      }
     } finally {
       setSubmitting(false);
     }
@@ -107,8 +154,9 @@ const Login = () => {
                 fullWidth
                 id="email"
                 name="email"
-                label="Email or Phone Number"
-                placeholder="Enter your email or phone number"
+                label="Email Address"
+                type="email"
+                placeholder="Enter your email"
                 variant="outlined"
                 error={touched.email && Boolean(errors.email)}
                 helperText={touched.email && errors.email}
@@ -118,6 +166,10 @@ const Login = () => {
                       <EmailIcon color="action" />
                     </InputAdornment>
                   ),
+                }}
+                inputProps={{
+                  maxLength: 255,
+                  autoComplete: "email"
                 }}
               />
             </Box>
@@ -147,29 +199,26 @@ const Login = () => {
                         onClick={handleTogglePassword}
                         edge="end"
                       >
-                        {showPassword ? <VisibilityOff /> : <Visibility />}
+                        {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
                       </IconButton>
                     </InputAdornment>
                   ),
                 }}
+                inputProps={{
+                  maxLength: 128,
+                  autoComplete: "current-password"
+                }}
               />
             </Box>
             
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <FormControlLabel
-                control={
-                  <Field
-                    as={Checkbox}
-                    name="rememberMe"
-                    color="primary"
-                  />
-                }
+                control={<Field as={Checkbox} name="rememberMe" color="primary" />}
                 label="Remember me"
               />
-              
               <Link to="/forgot-password" style={{ textDecoration: 'none' }}>
                 <Typography variant="body2" color="primary">
-                  Forgot password?
+                  Forgot Password?
                 </Typography>
               </Link>
             </Box>
@@ -178,12 +227,12 @@ const Login = () => {
               type="submit"
               fullWidth
               variant="contained"
-              color="primary"
               size="large"
-              disabled={isSubmitting}
-              sx={{ 
-                py: 1.5,
+              disabled={isSubmitting || loginAttempts >= 5}
+              sx={{
+                mt: 1,
                 mb: 3,
+                py: 1.5,
                 borderRadius: '8px',
                 fontWeight: 'bold'
               }}
@@ -191,22 +240,16 @@ const Login = () => {
               {isSubmitting ? (
                 <CircularProgress size={24} color="inherit" />
               ) : (
-                'Login'
+                'Sign In'
               )}
             </Button>
-            
-            <Divider sx={{ my: 3 }}>
-              <Typography variant="body2" color="text.secondary">
-                OR
-              </Typography>
-            </Divider>
             
             <Box sx={{ textAlign: 'center' }}>
               <Typography variant="body2" color="text.secondary">
                 Don't have an account?
                 <Link to="/register" style={{ textDecoration: 'none', marginLeft: '5px' }}>
                   <Typography variant="body2" component="span" color="primary" fontWeight="bold">
-                    Register Now
+                    Sign Up
                   </Typography>
                 </Link>
               </Typography>

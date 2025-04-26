@@ -28,7 +28,7 @@ const AuthLayout = () => {
         minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        bgcolor: darkMode ? 'background.default' : '#f5f5f5',
+        bgcolor: 'background.default',
         position: 'relative'
       }}
     >
@@ -88,10 +88,8 @@ const AuthLayout = () => {
           sx={{
             p: isMobile ? 3 : 4,
             borderRadius: 2,
-            bgcolor: darkMode ? 'background.paper' : 'white',
-            boxShadow: darkMode 
-              ? '0 4px 20px rgba(0, 0, 0, 0.5)' 
-              : '0 8px 40px rgba(0, 0, 0, 0.1)'
+            bgcolor: 'background.paper',
+            boxShadow: theme => theme.shadows[darkMode ? 2 : 4]
           }}
         >
           <Outlet />

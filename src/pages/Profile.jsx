@@ -1,7 +1,11 @@
-import React, { useState, useContext } from 'react';
-import { Formik, Form, Field, ErrorMessage } from 'formik';
+import React, { useState, useContext, useEffect } from 'react';
+import { Formik, Form, Field } from 'formik';
 import * as Yup from 'yup';
 import { ThemeContext } from '../contexts/ThemeContext';
+import { AuthContext } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import authService from '../services/authService';
+import accountService from '../services/accountService';
 
 // Material UI imports
 import {
@@ -77,68 +81,67 @@ function TabPanel(props) {
 
 // Personal Information Form Schema
 const PersonalInfoSchema = Yup.object().shape({
-  firstName: Yup.string().required('First name is required'),
-  lastName: Yup.string().required('Last name is required'),
+  first_name: Yup.string().required('First name is required'),
+  last_name: Yup.string().required('Last name is required'),
   email: Yup.string().email('Invalid email address').required('Email is required'),
   phone: Yup.string().required('Phone number is required')
 });
 
 // Password Change Form Schema
 const PasswordChangeSchema = Yup.object().shape({
-  currentPassword: Yup.string().required('Current password is required'),
-  newPassword: Yup.string()
+  current_password: Yup.string().required('Current password is required'),
+  new_password: Yup.string()
     .min(8, 'Password must be at least 8 characters')
     .matches(
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/,
       'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character'
     )
     .required('New password is required'),
-  confirmPassword: Yup.string()
-    .oneOf([Yup.ref('newPassword'), null], 'Passwords must match')
+  confirm_password: Yup.string()
+    .oneOf([Yup.ref('new_password'), null], 'Passwords must match')
     .required('Confirm password is required')
 });
-
-// Mock user data
-const userData = {
-  firstName: 'saman',
-  lastName: 'kumara',
-  email: 'saman.kumara@example.com',
-  phone: '+1 (555) 123-4567',
-  avatar: null,
-  twoFactorEnabled: true,
-  language: 'en',
-  notificationsEnabled: true,
-  sessions: [
-    {
-      id: 1,
-      device: 'Chrome on Windows',
-      location: 'New York, USA',
-      lastActive: '2023-09-28T14:30:00',
-      current: true
-    },
-    {
-      id: 2,
-      device: 'Safari on iPhone',
-      location: 'New York, USA',
-      lastActive: '2023-09-27T09:15:00',
-      current: false
-    }
-  ]
-};
 
 const Profile = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { darkMode, toggleTheme } = useContext(ThemeContext);
+  const { darkMode, toggleTheme, language, changeLanguage } = useContext(ThemeContext);
+  const { user, updateUser, logout: authLogout } = useContext(AuthContext);
+  const navigate = useNavigate();
+  
   const [tabValue, setTabValue] = useState(0);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordChangeSuccess, setPasswordChangeSuccess] = useState(false);
+  const [passwordChangeError, setPasswordChangeError] = useState('');
   const [profileUpdateSuccess, setProfileUpdateSuccess] = useState(false);
+  const [profileUpdateError, setProfileUpdateError] = useState('');
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
   const [avatarDialogOpen, setAvatarDialogOpen] = useState(false);
+  const [userSessions, setUserSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+
+  // Fetch active sessions when the component mounts
+  useEffect(() => {
+    const fetchSessions = async () => {
+      if (user) {
+        setLoadingSessions(true);
+        try {
+          // In a real implementation, this would fetch from the API
+          const response = await accountService.getActiveSessions();
+          setUserSessions(response || []);
+        } catch (error) {
+          console.error('Failed to load active sessions:', error);
+        } finally {
+          setLoadingSessions(false);
+        }
+      }
+    };
+    
+    fetchSessions();
+  }, [user]);
   
   const handleTabChange = (event, newValue) => {
     setTabValue(newValue);
@@ -158,9 +161,9 @@ const Profile = () => {
   
   const handleUpdateProfile = async (values, { setSubmitting }) => {
     try {
-      // In a real app, you would make an API call here
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
-      
+      setProfileUpdateError('');
+      // Update user profile using the auth service
+      await updateUser(values);
       setProfileUpdateSuccess(true);
       
       // Hide success message after 3 seconds
@@ -169,6 +172,7 @@ const Profile = () => {
       }, 3000);
     } catch (error) {
       console.error('Profile update error:', error);
+      setProfileUpdateError(error.message || 'Failed to update profile. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -176,8 +180,12 @@ const Profile = () => {
   
   const handleChangePassword = async (values, { setSubmitting, resetForm }) => {
     try {
-      // In a real app, you would make an API call here
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      setPasswordChangeError('');
+      // Call the password change API
+      await authService.changePassword({
+        current_password: values.current_password,
+        new_password: values.new_password
+      });
       
       setPasswordChangeSuccess(true);
       resetForm();
@@ -188,21 +196,64 @@ const Profile = () => {
       }, 3000);
     } catch (error) {
       console.error('Password change error:', error);
+      setPasswordChangeError(error.message || 'Failed to change password. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
   
-  const handleLogout = () => {
-    // In a real app, you would clear auth state and redirect to login
+  const handleLogout = async () => {
+    try {
+      await authLogout();
+      navigate('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      // If logout fails on the API side, still clear local session
+      navigate('/login');
+    }
     setLogoutDialogOpen(false);
-    window.location.href = '/login';
   };
   
-  const handleDeleteAccount = () => {
-    // In a real app, you would make an API call to delete the account
+  const handleDeleteAccount = async () => {
+    try {
+      // Call the API to delete the account
+      await authService.deleteAccount();
+      await authLogout();
+      navigate('/login');
+    } catch (error) {
+      console.error('Delete account error:', error);
+    }
     setDeleteAccountDialogOpen(false);
-    window.location.href = '/login';
+  };
+  
+  const handleUpdatePreferences = async (preferences) => {
+    try {
+      await accountService.updatePreferences(preferences);
+      // Update the user context if needed
+    } catch (error) {
+      console.error('Failed to update preferences:', error);
+    }
+  };
+  
+  const handleChangeLanguage = async (event) => {
+    const newLanguage = event.target.value;
+    try {
+      await handleUpdatePreferences({ language: newLanguage });
+      // Update the ThemeContext language state
+      changeLanguage(newLanguage);
+    } catch (error) {
+      console.error('Failed to change language:', error);
+    }
+  };
+  
+  const handleToggleNotifications = async (event) => {
+    const enabled = event.target.checked;
+    try {
+      await handleUpdatePreferences({ notificationsEnabled: enabled });
+      // If you have the user in context, update that as well
+    } catch (error) {
+      console.error('Failed to toggle notifications:', error);
+    }
   };
   
   const handleOpenAvatarDialog = () => {
@@ -232,10 +283,10 @@ const Profile = () => {
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 3, textAlign: 'center' }}>
             <Box sx={{ position: 'relative', display: 'inline-block' }}>
-              {userData.avatar ? (
+              {user.avatar ? (
                 <Avatar 
-                  src={userData.avatar} 
-                  alt={`${userData.firstName} ${userData.lastName}`}
+                  src={user.avatar} 
+                  alt={`${user.first_name} ${user.last_name}`}
                   sx={{ width: 120, height: 120, mx: 'auto', mb: 2 }}
                 />
               ) : (
@@ -249,7 +300,8 @@ const Profile = () => {
                     fontSize: '3rem'
                   }}
                 >
-                  {userData.firstName.charAt(0)}{userData.lastName.charAt(0)}
+                  {user.first_name ? user.first_name.charAt(0) : ''}
+                  {user.last_name ? user.last_name.charAt(0) : ''}
                 </Avatar>
               )}
               
@@ -268,15 +320,15 @@ const Profile = () => {
             </Box>
             
             <Typography variant="h5" gutterBottom>
-              {userData.firstName} {userData.lastName}
+              {user.first_name} {user.last_name}
             </Typography>
             
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              {userData.email}
+              {user.email}
             </Typography>
             
             <Typography variant="body2" color="text.secondary">
-              {userData.phone}
+              {user.phone}
             </Typography>
             
             <Divider sx={{ my: 2 }} />
@@ -329,10 +381,10 @@ const Profile = () => {
               
               <Formik
                 initialValues={{
-                  firstName: userData.firstName,
-                  lastName: userData.lastName,
-                  email: userData.email,
-                  phone: userData.phone
+                  first_name: user?.first_name || '',
+                  last_name: user?.last_name || '',
+                  email: user?.email || '',
+                  phone: user?.phone || ''
                 }}
                 validationSchema={PersonalInfoSchema}
                 onSubmit={handleUpdateProfile}
@@ -344,10 +396,10 @@ const Profile = () => {
                         <Field
                           as={TextField}
                           fullWidth
-                          name="firstName"
+                          name="first_name"
                           label="First Name"
-                          error={touched.firstName && Boolean(errors.firstName)}
-                          helperText={touched.firstName && errors.firstName}
+                          error={touched.first_name && Boolean(errors.first_name)}
+                          helperText={touched.first_name && errors.first_name}
                         />
                       </Grid>
                       
@@ -355,10 +407,10 @@ const Profile = () => {
                         <Field
                           as={TextField}
                           fullWidth
-                          name="lastName"
+                          name="last_name"
                           label="Last Name"
-                          error={touched.lastName && Boolean(errors.lastName)}
-                          helperText={touched.lastName && errors.lastName}
+                          error={touched.last_name && Boolean(errors.last_name)}
+                          helperText={touched.last_name && errors.last_name}
                         />
                       </Grid>
                       
@@ -416,9 +468,9 @@ const Profile = () => {
               
               <Formik
                 initialValues={{
-                  currentPassword: '',
-                  newPassword: '',
-                  confirmPassword: ''
+                  current_password: '',
+                  new_password: '',
+                  confirm_password: ''
                 }}
                 validationSchema={PasswordChangeSchema}
                 onSubmit={handleChangePassword}
@@ -430,11 +482,11 @@ const Profile = () => {
                         <Field
                           as={TextField}
                           fullWidth
-                          name="currentPassword"
+                          name="current_password"
                           label="Current Password"
                           type={showCurrentPassword ? 'text' : 'password'}
-                          error={touched.currentPassword && Boolean(errors.currentPassword)}
-                          helperText={touched.currentPassword && errors.currentPassword}
+                          error={touched.current_password && Boolean(errors.current_password)}
+                          helperText={touched.current_password && errors.current_password}
                           InputProps={{
                             startAdornment: (
                               <InputAdornment position="start">
@@ -460,11 +512,11 @@ const Profile = () => {
                         <Field
                           as={TextField}
                           fullWidth
-                          name="newPassword"
+                          name="new_password"
                           label="New Password"
                           type={showNewPassword ? 'text' : 'password'}
-                          error={touched.newPassword && Boolean(errors.newPassword)}
-                          helperText={touched.newPassword && errors.newPassword}
+                          error={touched.new_password && Boolean(errors.new_password)}
+                          helperText={touched.new_password && errors.new_password}
                           InputProps={{
                             startAdornment: (
                               <InputAdornment position="start">
@@ -490,11 +542,11 @@ const Profile = () => {
                         <Field
                           as={TextField}
                           fullWidth
-                          name="confirmPassword"
+                          name="confirm_password"
                           label="Confirm New Password"
                           type={showConfirmPassword ? 'text' : 'password'}
-                          error={touched.confirmPassword && Boolean(errors.confirmPassword)}
-                          helperText={touched.confirmPassword && errors.confirmPassword}
+                          error={touched.confirm_password && Boolean(errors.confirm_password)}
+                          helperText={touched.confirm_password && errors.confirm_password}
                           InputProps={{
                             startAdornment: (
                               <InputAdornment position="start">
@@ -542,14 +594,14 @@ const Profile = () => {
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={userData.twoFactorEnabled}
+                      checked={user.two_factor_enabled}
                       color="primary"
                     />
                   }
                   label="Enable Two-Factor Authentication"
                 />
                 
-                {userData.twoFactorEnabled && (
+                {user.two_factor_enabled && (
                   <Chip 
                     icon={<CheckCircleIcon />} 
                     label="Enabled" 
@@ -628,7 +680,8 @@ const Profile = () => {
                   <InputLabel id="language-select-label">Language</InputLabel>
                   <Select
                     labelId="language-select-label"
-                    value={userData.language}
+                    value={user.language || 'en'}
+                    onChange={handleChangeLanguage}
                     label="Language"
                     startAdornment={
                       <InputAdornment position="start">
@@ -659,7 +712,8 @@ const Profile = () => {
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={userData.notificationsEnabled}
+                      checked={user.notifications_enabled}
+                      onChange={handleToggleNotifications}
                       color="primary"
                     />
                   }
@@ -688,7 +742,7 @@ const Profile = () => {
               </Typography>
               
               <List>
-                {userData.sessions.map((session) => (
+                {userSessions.map((session) => (
                   <Paper 
                     key={session.id} 
                     sx={{ 

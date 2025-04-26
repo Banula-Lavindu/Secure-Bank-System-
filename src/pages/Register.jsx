@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
+import authService from '../services/authService';
 
 // Material UI imports
 import {
@@ -32,20 +33,39 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 // Validation schema
 const RegisterSchema = Yup.object().shape({
   firstName: Yup.string()
-    .required('First name is required'),
+    .required('First name is required')
+    .matches(
+      /^[a-zA-Z\s\-']+$/, 
+      'First name can only contain letters, spaces, hyphens and apostrophes'
+    )
+    .max(30, 'First name must be at most 30 characters'),
   lastName: Yup.string()
-    .required('Last name is required'),
+    .required('Last name is required')
+    .matches(
+      /^[a-zA-Z\s\-']+$/, 
+      'Last name can only contain letters, spaces, hyphens and apostrophes'
+    )
+    .max(30, 'Last name must be at most 30 characters'),
   email: Yup.string()
     .email('Invalid email address')
-    .required('Email is required'),
+    .required('Email is required')
+    .max(255, 'Email must be at most 255 characters'),
   phone: Yup.string()
     .required('Phone number is required')
-    .matches(/^[0-9+\-\s()]+$/, 'Invalid phone number format'),
+    .matches(
+      /^[0-9+\-\s()]+$/, 
+      'Phone number can only contain numbers, spaces, and + - ( ) characters'
+    )
+    .test(
+      'len', 
+      'Phone number must be between 7 and 15 digits', 
+      val => !val || (val.replace(/\D/g, '').length >= 7 && val.replace(/\D/g, '').length <= 15)
+    ),
   password: Yup.string()
     .min(8, 'Password must be at least 8 characters')
     .matches(
-      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/,
-      'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character'
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/,
+      'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&#)'
     )
     .required('Password is required'),
   confirmPassword: Yup.string()
@@ -95,6 +115,8 @@ const Register = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [registerError, setRegisterError] = useState('');
   const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [serverError, setServerError] = useState(false);
   const navigate = useNavigate();
 
   const handleTogglePassword = () => {
@@ -109,10 +131,11 @@ const Register = () => {
     setCaptchaVerified(verified);
   };
 
-  const handleSubmit = async (values, { setSubmitting }) => {
+  const handleSubmit = async (values, { setSubmitting, setFieldError }) => {
     try {
       // Clear any previous errors
       setRegisterError('');
+      setServerError(false);
       
       if (!captchaVerified) {
         setRegisterError('Please complete the CAPTCHA verification');
@@ -120,24 +143,125 @@ const Register = () => {
         return;
       }
       
-      // In a real app, you would make an API call here
-      console.log('Registration attempt with:', values);
+      // Sanitize input values
+      const sanitizedValues = {
+        first_name: values.firstName.trim(),
+        last_name: values.lastName.trim(),
+        email: values.email.trim().toLowerCase(),
+        phone: values.phone.trim(),
+        password: values.password,
+        password2: values.confirmPassword
+      };
       
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Call the registration API
+      const response = await authService.register(sanitizedValues);
       
-      // For demo purposes, we'll simulate a successful registration
-      localStorage.setItem('registrationSuccess', 'true');
+      // Show success message
+      setRegistrationSuccess(true);
       
-      // Redirect to login page
-      navigate('/login');
+      // Store email and OTP code (if available) for verification
+      localStorage.setItem('tempEmail', sanitizedValues.email);
+      localStorage.setItem('otpPurpose', 'registration');
+      
+      // Always store an OTP code, using a default if none provided
+      if (response && response.otp_code) {
+        localStorage.setItem('tempOtpCode', response.otp_code);
+      }
+      
+      // Redirect to OTP verification after a short delay
+      setTimeout(() => {
+        navigate('/otp-verification');
+      }, 2000);
+      
     } catch (error) {
       console.error('Registration error:', error);
-      setRegisterError('Registration failed. Please try again.');
+      
+      // Check if it's a server error
+      if (error.serverError) {
+        setServerError(true);
+        setRegisterError('Server error occurred. Please try again later.');
+        return;
+      }
+      
+      // Handle field-specific errors
+      if (error.errors) {
+        // Handle structured errors from the backend
+        Object.entries(error.errors).forEach(([field, messages]) => {
+          const message = Array.isArray(messages) ? messages[0] : messages;
+          
+          switch(field) {
+            case 'email':
+              setFieldError('email', message);
+              break;
+            case 'first_name':
+              setFieldError('firstName', message);
+              break;
+            case 'last_name':
+              setFieldError('lastName', message);
+              break;
+            case 'phone':
+              setFieldError('phone', message);
+              break;
+            case 'password':
+              setFieldError('password', message);
+              break;
+            case 'password2':
+              setFieldError('confirmPassword', message);
+              break;
+            default:
+              // For any other field errors, set as general error
+              setRegisterError(prev => prev ? `${prev}. ${message}` : message);
+          }
+        });
+      } else {
+        // Handle individual field errors for backward compatibility
+        if (error.email) {
+          setFieldError('email', Array.isArray(error.email) ? error.email[0] : error.email);
+        }
+        if (error.first_name) {
+          setFieldError('firstName', Array.isArray(error.first_name) ? error.first_name[0] : error.first_name);
+        }
+        if (error.last_name) {
+          setFieldError('lastName', Array.isArray(error.last_name) ? error.last_name[0] : error.last_name);
+        }
+        if (error.phone) {
+          setFieldError('phone', Array.isArray(error.phone) ? error.phone[0] : error.phone);
+        }
+        if (error.password) {
+          setFieldError('password', Array.isArray(error.password) ? error.password[0] : error.password);
+        }
+        if (error.password2) {
+          setFieldError('confirmPassword', Array.isArray(error.password2) ? error.password2[0] : error.password2);
+        }
+      }
+      
+      // Set general error message if no specific field errors were set
+      if (!error.email && !error.first_name && !error.last_name && !error.phone && 
+          !error.password && !error.password2 && !error.errors) {
+        setRegisterError(error.message || error.non_field_errors?.[0] || 'Registration failed. Please try again.');
+      }
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (registrationSuccess) {
+    return (
+      <Box sx={{ textAlign: 'center', py: 4 }}>
+        <CheckCircleIcon color="success" sx={{ fontSize: 60, mb: 2 }} />
+        <Typography variant="h5" gutterBottom>
+          Registration Successful!
+        </Typography>
+        <Typography variant="body1" color="text.secondary" paragraph>
+          Please check your email for verification instructions.
+        </Typography>
+        <Typography variant="body2">
+          Redirecting you to the next step...
+        </Typography>
+        <CircularProgress size={24} sx={{ mt: 2 }} />
+      </Box>
+    );
+  }
 
   return (
     <Box>
@@ -151,6 +275,12 @@ const Register = () => {
       {registerError && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {registerError}
+        </Alert>
+      )}
+      
+      {serverError && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          There appears to be a temporary issue with our registration service. Your information is secure, but you may need to try again later or contact support if the problem persists.
         </Alert>
       )}
       
@@ -320,6 +450,42 @@ const Register = () => {
                 />
               </Grid>
             </Grid>
+            
+            {/* Display more detailed password requirements */}
+            {touched.password && (
+              <Box sx={{ mt: 1, mb: 2 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Password must:
+                </Typography>
+                <ul style={{ margin: '4px 0', paddingLeft: '20px' }}>
+                  <li>
+                    <Typography variant="caption" color={errors.password ? "error.main" : "text.secondary"}>
+                      Be at least 8 characters long
+                    </Typography>
+                  </li>
+                  <li>
+                    <Typography variant="caption" color={errors.password ? "error.main" : "text.secondary"}>
+                      Contain at least one uppercase letter
+                    </Typography>
+                  </li>
+                  <li>
+                    <Typography variant="caption" color={errors.password ? "error.main" : "text.secondary"}>
+                      Contain at least one lowercase letter
+                    </Typography>
+                  </li>
+                  <li>
+                    <Typography variant="caption" color={errors.password ? "error.main" : "text.secondary"}>
+                      Contain at least one number
+                    </Typography>
+                  </li>
+                  <li>
+                    <Typography variant="caption" color={errors.password ? "error.main" : "text.secondary"}>
+                      Contain at least one special character (@$!%*?&#)
+                    </Typography>
+                  </li>
+                </ul>
+              </Box>
+            )}
             
             <Captcha onChange={handleCaptchaChange} />
             

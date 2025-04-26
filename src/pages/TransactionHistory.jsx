@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import transactionService from '../services/transactionService';
 
 // Material UI imports
 import {
@@ -32,7 +33,9 @@ import {
   CardContent,
   useTheme,
   useMediaQuery,
-  Stack
+  Stack,
+  CircularProgress,
+  Alert
 } from '@mui/material';
 
 // Date picker
@@ -54,61 +57,8 @@ import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import CategoryIcon from '@mui/icons-material/Category';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 
-// Mock transaction data
-const generateTransactions = (count) => {
-  const types = ['debit', 'credit'];
-  const categories = ['Shopping', 'Food', 'Entertainment', 'Transport', 'Bills', 'Income', 'Transfer'];
-  const descriptions = [
-    'Amazon.com', 'Grocery Store', 'Netflix Subscription', 'Uber Ride', 
-    'Electricity Bill', 'Salary Deposit', 'Restaurant Payment', 'Gas Station',
-    'Phone Bill', 'Transfer to Savings', 'ATM Withdrawal', 'Online Purchase',
-    'Insurance Payment', 'Gym Membership', 'Coffee Shop'
-  ];
-  
-  const transactions = [];
-  
-  for (let i = 1; i <= count; i++) {
-    const type = types[Math.floor(Math.random() * types.length)];
-    const category = categories[Math.floor(Math.random() * categories.length)];
-    const description = descriptions[Math.floor(Math.random() * descriptions.length)];
-    
-    // Generate a random date within the last 3 months
-    const date = new Date();
-    date.setDate(date.getDate() - Math.floor(Math.random() * 90));
-    
-    // Format date as YYYY-MM-DD
-    const formattedDate = date.toISOString().split('T')[0];
-    
-    // Generate random time
-    const hours = Math.floor(Math.random() * 24).toString().padStart(2, '0');
-    const minutes = Math.floor(Math.random() * 60).toString().padStart(2, '0');
-    const time = `${hours}:${minutes}`;
-    
-    // Generate random amount between 1 and 5000
-    const amount = parseFloat((Math.random() * 4999 + 1).toFixed(2));
-    
-    transactions.push({
-      id: i,
-      type,
-      amount,
-      description,
-      category,
-      date: formattedDate,
-      time,
-      account: type === 'credit' ? 'Checking Account' : 'Checking Account',
-      reference: `REF-${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`,
-      status: 'Completed'
-    });
-  }
-  
-  // Sort by date (newest first)
-  return transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-};
-
-const allTransactions = generateTransactions(50);
-
 // Helper function to format currency
-const formatCurrency = (amount, currency = 'LKR') => {
+const formatCurrency = (amount, currency = 'USD') => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: currency
@@ -121,6 +71,24 @@ const formatDate = (dateString) => {
   return new Date(dateString).toLocaleDateString(undefined, options);
 };
 
+// Convert API transaction data to component-friendly format
+const mapTransaction = (transaction) => {
+  return {
+    id: transaction.id,
+    date: new Date(transaction.date_created).toISOString().split('T')[0],
+    time: new Date(transaction.date_created).toTimeString().substring(0, 8),
+    description: transaction.description || 'No description',
+    amount: parseFloat(transaction.amount),
+    currency: transaction.currency || 'USD',
+    type: transaction.transaction_type === 'deposit' || 
+          transaction.source_account === null ? 'credit' : 'debit',
+    category: transaction.category || 'Other',
+    reference: transaction.reference_number,
+    account: transaction.source_account_number || transaction.destination_account_number,
+    status: transaction.status_display || transaction.status
+  };
+};
+
 const TransactionHistory = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -130,6 +98,8 @@ const TransactionHistory = () => {
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   
   // Filter states
   const [dateFrom, setDateFrom] = useState(null);
@@ -139,12 +109,60 @@ const TransactionHistory = () => {
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
   
-  // Filtered transactions
-  const [filteredTransactions, setFilteredTransactions] = useState(allTransactions);
+  // Transactions states
+  const [allTransactions, setAllTransactions] = useState([]);
+  const [filteredTransactions, setFilteredTransactions] = useState([]);
+  const [categories, setCategories] = useState(['all']);
+  
+  // Fetch transactions from API
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // Fetch all transactions
+        const response = await transactionService.getTransactions();
+        
+        // Check if response is paginated (has results property)
+        const transactions = response.results 
+          ? response.results.map(mapTransaction) 
+          : Array.isArray(response)
+            ? response.map(mapTransaction)
+            : []; // Fallback to empty array if no valid data
+        
+        setAllTransactions(transactions);
+        setFilteredTransactions(transactions);
+        
+        // Extract unique categories for filter dropdown
+        const uniqueCategories = ['all'];
+        
+        // Only try to extract categories if we have transactions
+        if (transactions.length > 0) {
+          transactions.forEach(t => {
+            if (t.category && !uniqueCategories.includes(t.category)) {
+              uniqueCategories.push(t.category);
+            }
+          });
+        }
+        
+        setCategories(uniqueCategories);
+      } catch (err) {
+        console.error('Error fetching transactions:', err);
+        setError('Failed to load transactions. Please try again later.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchTransactions();
+  }, []);
   
   // Apply filters
   useEffect(() => {
-    let result = allTransactions;
+    if (!allTransactions.length) return;
+    
+    let result = [...allTransactions];
     
     // Search term filter
     if (searchTerm) {
@@ -152,7 +170,7 @@ const TransactionHistory = () => {
       result = result.filter(transaction => 
         transaction.description.toLowerCase().includes(term) ||
         transaction.category.toLowerCase().includes(term) ||
-        transaction.reference.toLowerCase().includes(term)
+        transaction.reference?.toLowerCase().includes(term)
       );
     }
     
@@ -202,10 +220,7 @@ const TransactionHistory = () => {
     
     setFilteredTransactions(result);
     setPage(0); // Reset to first page when filters change
-  }, [searchTerm, dateFrom, dateTo, typeFilter, categoryFilter, amountMin, amountMax]);
-  
-  // Get unique categories for filter dropdown
-  const categories = ['all', ...new Set(allTransactions.map(t => t.category))];
+  }, [allTransactions, searchTerm, dateFrom, dateTo, typeFilter, categoryFilter, amountMin, amountMax]);
   
   const handleChangePage = (event, newPage) => {
     setPage(newPage);
@@ -234,9 +249,41 @@ const TransactionHistory = () => {
     setSearchTerm('');
   };
   
-  const handleExport = () => {
-    // In a real app, this would generate and download a CSV/PDF file
-    alert('Export functionality would be implemented here');
+  const handleExport = async (format = 'csv') => {
+    try {
+      setLoading(true);
+      
+      // Create filter object from current filters
+      const filters = {};
+      if (dateFrom) filters.dateFrom = dateFrom.toISOString().split('T')[0];
+      if (dateTo) filters.dateTo = dateTo.toISOString().split('T')[0];
+      if (typeFilter !== 'all') filters.type = typeFilter;
+      if (categoryFilter !== 'all') filters.category = categoryFilter;
+      if (amountMin) filters.minAmount = amountMin;
+      if (amountMax) filters.maxAmount = amountMax;
+      if (searchTerm) filters.search = searchTerm;
+      
+      // Call service to export
+      const blob = await transactionService.exportTransactions(filters, format);
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `transactions_${new Date().toISOString().split('T')[0]}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      
+      // Clean up
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Export error:', err);
+      setError('Failed to export transactions.');
+    } finally {
+      setLoading(false);
+    }
   };
   
   const handleRowClick = (transaction) => {
@@ -251,11 +298,26 @@ const TransactionHistory = () => {
   // Calculate if any filters are active
   const isFiltered = dateFrom || dateTo || typeFilter !== 'all' || categoryFilter !== 'all' || amountMin || amountMax;
   
+  // Render loading state
+  if (loading && !allTransactions.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+  
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
         Transaction History
       </Typography>
+      
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
+        </Alert>
+      )}
       
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 2, mb: 3 }}>
@@ -296,9 +358,10 @@ const TransactionHistory = () => {
               variant="outlined"
               color="primary"
               startIcon={<GetAppIcon />}
-              onClick={handleExport}
+              onClick={() => handleExport('csv')}
+              disabled={loading}
             >
-              Export
+              Export CSV
             </Button>
           </Box>
         </Box>
@@ -431,7 +494,15 @@ const TransactionHistory = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredTransactions
+              {loading && (
+                <TableRow>
+                  <TableCell colSpan={7} align="center" sx={{ py: 3 }}>
+                    <CircularProgress size={30} />
+                  </TableCell>
+                </TableRow>
+              )}
+              
+              {!loading && filteredTransactions
                 .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                 .map((transaction) => (
                   <TableRow 
@@ -456,7 +527,7 @@ const TransactionHistory = () => {
                         {transaction.description}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {transaction.account}
+                        {transaction.account_name || transaction.account}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -482,7 +553,7 @@ const TransactionHistory = () => {
                           color: transaction.type === 'credit' ? 'success.main' : 'error.main'
                         }}
                       >
-                        {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount)}
+                        {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount, transaction.currency)}
                       </Typography>
                     </TableCell>
                     <TableCell align="center">
@@ -501,7 +572,7 @@ const TransactionHistory = () => {
                   </TableRow>
                 ))}
               
-              {filteredTransactions.length === 0 && (
+              {!loading && filteredTransactions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} align="center" sx={{ py: 3 }}>
                     <Typography variant="body1" color="text.secondary">
@@ -554,7 +625,7 @@ const TransactionHistory = () => {
               <Card sx={{ bgcolor: 'action.hover', mb: 3 }}>
                 <CardContent>
                   <Typography variant="h5" align="center" gutterBottom>
-                    {selectedTransaction.type === 'credit' ? '+' : '-'}{formatCurrency(selectedTransaction.amount)}
+                    {selectedTransaction.type === 'credit' ? '+' : '-'}{formatCurrency(selectedTransaction.amount, selectedTransaction.currency)}
                   </Typography>
                   
                   <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1 }}>
@@ -598,7 +669,7 @@ const TransactionHistory = () => {
                   <AccountBalanceIcon sx={{ mr: 2, color: 'text.secondary' }} />
                   <Box>
                     <Typography variant="body2" color="text.secondary">Account</Typography>
-                    <Typography variant="body1">{selectedTransaction.account}</Typography>
+                    <Typography variant="body1">{selectedTransaction.account_name || selectedTransaction.account}</Typography>
                   </Box>
                 </Box>
                 
@@ -627,7 +698,18 @@ const TransactionHistory = () => {
           
           <DialogActions>
             <Button onClick={handleCloseDialog}>Close</Button>
-            <Button variant="outlined" startIcon={<GetAppIcon />}>
+            <Button 
+              variant="outlined" 
+              startIcon={<GetAppIcon />}
+              onClick={async () => {
+                try {
+                  await transactionService.getTransactionDetails(selectedTransaction.id);
+                  // Handle receipt download
+                } catch (error) {
+                  console.error("Error downloading receipt:", error);
+                }
+              }}
+            >
               Download Receipt
             </Button>
           </DialogActions>

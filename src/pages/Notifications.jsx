@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
+import { ThemeContext } from '../contexts/ThemeContext';
+import { NotificationContext } from '../contexts/NotificationContext';
 
 // Material UI imports
 import {
@@ -22,7 +24,8 @@ import {
   DialogContent,
   DialogActions,
   useTheme,
-  useMediaQuery
+  useMediaQuery,
+  CircularProgress
 } from '@mui/material';
 
 // Icons
@@ -260,7 +263,16 @@ const Notifications = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [tabValue, setTabValue] = useState(0);
-  const [notifications, setNotifications] = useState(allNotifications);
+  const { 
+    notifications, 
+    isLoading, 
+    unreadCount, 
+    markAsRead, 
+    markAllAsRead, 
+    deleteNotification, 
+    deleteAllNotifications 
+  } = useContext(NotificationContext);
+  
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   
@@ -269,17 +281,11 @@ const Notifications = () => {
   };
   
   const handleMarkAsRead = (notification) => {
-    setNotifications(prevNotifications =>
-      prevNotifications.map(n =>
-        n.id === notification.id ? { ...n, read: true } : n
-      )
-    );
+    markAsRead(notification.id);
   };
   
   const handleDelete = (notification) => {
-    setNotifications(prevNotifications =>
-      prevNotifications.filter(n => n.id !== notification.id)
-    );
+    deleteNotification(notification.id);
     
     if (detailDialogOpen && selectedNotification?.id === notification.id) {
       setDetailDialogOpen(false);
@@ -296,16 +302,6 @@ const Notifications = () => {
   
   const handleCloseDetailDialog = () => {
     setDetailDialogOpen(false);
-  };
-  
-  const handleMarkAllAsRead = () => {
-    setNotifications(prevNotifications =>
-      prevNotifications.map(n => ({ ...n, read: true }))
-    );
-  };
-  
-  const handleDeleteAll = () => {
-    setNotifications([]);
   };
   
   // Filter notifications based on the selected tab
@@ -327,7 +323,14 @@ const Notifications = () => {
   };
   
   const filteredNotifications = getFilteredNotifications();
-  const unreadCount = notifications.filter(n => !n.read).length;
+  
+  if (isLoading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
   
   return (
     <Box>
@@ -346,7 +349,7 @@ const Notifications = () => {
         <Box>
           <Button 
             startIcon={<MarkEmailReadIcon />}
-            onClick={handleMarkAllAsRead}
+            onClick={markAllAsRead}
             disabled={unreadCount === 0}
             sx={{ mr: 1 }}
           >
@@ -355,7 +358,7 @@ const Notifications = () => {
           <Button 
             startIcon={<DeleteIcon />}
             color="error"
-            onClick={handleDeleteAll}
+            onClick={deleteAllNotifications}
             disabled={notifications.length === 0}
           >
             Clear All
@@ -462,11 +465,11 @@ const Notifications = () => {
               <Box sx={{ display: 'flex', alignItems: 'center' }}>
                 <Avatar 
                   sx={{ 
-                    bgcolor: `${getColor(selectedNotification.type)}.light`,
+                    bgcolor: getAvatarColor(selectedNotification.type),
                     mr: 2
                   }}
                 >
-                  {getIcon(selectedNotification.type)}
+                  {getNotificationIcon(selectedNotification.type)}
                 </Avatar>
                 <Typography variant="h6">
                   {selectedNotification.type.charAt(0).toUpperCase() + selectedNotification.type.slice(1)} Notification
@@ -554,7 +557,7 @@ const NotificationsList = ({ notifications, onRead, onDelete, onView }) => {
 };
 
 // Helper functions for the dialog
-const getIcon = (type) => {
+const getNotificationIcon = (type) => {
   switch (type) {
     case 'transaction':
       return <MonetizationOnIcon />;
@@ -569,18 +572,18 @@ const getIcon = (type) => {
   }
 };
 
-const getColor = (type) => {
+const getAvatarColor = (type) => {
   switch (type) {
     case 'transaction':
-      return 'primary';
+      return 'primary.light';
     case 'security':
-      return 'error';
+      return 'error.light';
     case 'promotion':
-      return 'secondary';
+      return 'secondary.light';
     case 'info':
-      return 'info';
+      return 'info.light';
     default:
-      return 'default';
+      return 'grey.light';
   }
 };
 
